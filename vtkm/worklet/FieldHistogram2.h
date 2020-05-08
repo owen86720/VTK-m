@@ -53,8 +53,33 @@ namespace worklet
 class FieldHistogram2
 {
 public:
-  // For each value set the block it should be in
+  
   template <typename FieldType>
+  class ComputeDelta : public vtkm::worklet::WorkletMapField
+  {
+  public:
+    using ControlSignature = void(FieldIn blockMinValue, FieldIn blockMaxValue, FieldOut delta);
+    using ExecutionSignature = void(_1, _2, _3);
+    using InputDomain = _1;
+
+    vtkm::Id NumberOfBins ;
+
+    VTKM_CONT
+    ComputeDelta(vtkm::Id NumberOfBins0)
+      : NumberOfBins(NumberOfBins0)
+    {
+    }
+
+    VTKM_EXEC
+    void operator()(const FieldType& blockMinValue, const FieldType& blockMaxValue, FieldType& delta) const
+    {
+      using VecType = vtkm::VecTraits<FieldType>;
+      const FieldType fieldRange = blockMaxValue - blockMinValue;
+      delta = fieldRange / static_cast<typename VecType::ComponentType>(NumberOfBins);
+    }
+  };
+
+  // For each value set the block it should be in
   class SetBlock : public vtkm::worklet::WorkletMapField
   {
   public:
@@ -62,18 +87,39 @@ public:
     using ExecutionSignature = void(_1, _2);
     using InputDomain = _1;
 
-    vtkm::Id numberOfBlocks;
+    vtkm::Vec<vtkm::Id,3> cutInfo;
+    vtkm::Id xVerts = 500 ;
+    vtkm::Id yVerts = 500 ;
+    vtkm::Id zVerts = 100 ;
 
     VTKM_CONT
-    SetBlock(vtkm::Id numberOfBlocks0)
-      : numberOfBlocks(numberOfBlocks0)
+    SetBlock(vtkm::Vec<vtkm::Id,3> cutInfo0)
+      : cutInfo(cutInfo0)
     {
     }
 
     VTKM_EXEC
-    void operator()(const FieldType& index, vtkm::Id& blockIndex) const
+    void operator()(const vtkm::Id& index, vtkm::Id& blockIndex) const
     {
-      blockIndex = vtkm::FMod(index , numberOfBlocks);
+      vtkm::Id xIndex,yIndex,zIndex;
+      vtkm::Id xbIndex,ybIndex,zbIndex;
+
+      zIndex = index / (xVerts*yVerts);
+      yIndex = vtkm::FMod(static_cast<vtkm::Float64>(index) , static_cast<vtkm::Float64>(xVerts*yVerts)) / xVerts;
+      xIndex = vtkm::FMod(static_cast<vtkm::Float64>(index) , static_cast<vtkm::Float64>(xVerts*yVerts)) - yIndex * xVerts;
+
+      xbIndex = xIndex/(xVerts/cutInfo[0]);
+      ybIndex = yIndex/(yVerts/cutInfo[1]);
+      zbIndex = zIndex/(zVerts/cutInfo[2]);
+
+      blockIndex = xbIndex + ybIndex * cutInfo[0] + zbIndex * cutInfo[0] * cutInfo[1] ;
+
+      // if(index == 24999999)
+      //   std::cout << "FKKKK" << '\n';
+      // if(index == 25000000){
+      //   std::cout << "FKKKK222222" << '\n';
+      //   std::cout << index << ' '<< zIndex <<' ' << yIndex <<' '<< xIndex <<' '<< zbIndex<<' ' << ybIndex <<' '<< xbIndex << '\n';
+      // }
     }
   };
 
@@ -82,26 +128,32 @@ public:
   class SetHistogramBin : public vtkm::worklet::WorkletMapField
   {
   public:
-    using ControlSignature = void(FieldIn value, FieldOut binIndex);
-    using ExecutionSignature = void(_1, _2);
+    using ControlSignature = void(WholeArrayIn blockMin, WholeArrayIn delta, FieldIn blockIndex, FieldIn value, FieldOut binIndex);
+    using ExecutionSignature = void(_1, _2, _3, _4, _5);
     using InputDomain = _1;
 
     vtkm::Id numberOfBins;
-    FieldType minValue;
-    FieldType delta;
 
     VTKM_CONT
-    SetHistogramBin(vtkm::Id numberOfBins0, FieldType minValue0, FieldType delta0)
+    SetHistogramBin(vtkm::Id numberOfBins0)
       : numberOfBins(numberOfBins0)
-      , minValue(minValue0)
-      , delta(delta0)
     {
     }
 
+    template <typename WholeArrayType>
     VTKM_EXEC
-    void operator()(const FieldType& value, vtkm::Id& binIndex) const
+    void operator()(const WholeArrayType& blockMin,
+                    const WholeArrayType& delta,
+                    const vtkm::Id& blockIndex, 
+                    const FieldType& value, 
+                    vtkm::Id& binIndex) const
     {
-      binIndex = static_cast<vtkm::Id>((value - minValue) / delta);
+      FieldType minValue;
+      FieldType deltaValue;
+      minValue = blockMin.Get(blockIndex);
+      deltaValue = delta.Get(blockIndex);
+
+      binIndex = static_cast<vtkm::Id>((value - minValue) / deltaValue);
       if (binIndex < 0)
         binIndex = 0;
       else if (binIndex >= numberOfBins)
@@ -159,51 +211,52 @@ public:
   // min value of the bins
   // delta/range of each bin
   // number of values in each bin
-  template <typename FieldType, typename Storage>
-  void Run(vtkm::cont::ArrayHandle<FieldType, Storage> fieldArray,
-           vtkm::Id numberOfBlocks,
-           vtkm::Id numberOfBins,
-           vtkm::Range& rangeOfValues,
-           FieldType& binDelta,
-           vtkm::cont::ArrayHandle<vtkm::Id>& binArray)
-  {
-    const vtkm::Vec<FieldType, 2> initValue{ vtkm::cont::ArrayGetValue(0, fieldArray) };
+  // template <typename FieldType, typename Storage>
+  // void Run(vtkm::cont::ArrayHandle<FieldType, Storage> fieldArray,
+  //          vtkm::Vec<vtkm::Id,3> cutInfo,
+  //          vtkm::Id numberOfBins,
+  //          vtkm::Range& rangeOfValues,
+  //          FieldType& binDelta,
+  //          vtkm::cont::ArrayHandle<vtkm::Id>& binArray)
+  // {
+  //   const vtkm::Vec<FieldType, 2> initValue{ vtkm::cont::ArrayGetValue(0, fieldArray) };
 
-    vtkm::Vec<FieldType, 2> result =
-      vtkm::cont::Algorithm::Reduce(fieldArray, initValue, vtkm::MinAndMax<FieldType>());
+  //   vtkm::Vec<FieldType, 2> result =
+  //     vtkm::cont::Algorithm::Reduce(fieldArray, initValue, vtkm::MinAndMax<FieldType>());
 
-    this->Run(fieldArray, numberOfBlocks, numberOfBins, result[0], result[1], binDelta, binArray);
+  //   this->Run(fieldArray, cutInfo, numberOfBins, result[0], result[1], binDelta, binArray);
 
-    //update the users data
-    rangeOfValues = vtkm::Range(result[0], result[1]);
-  }
+  //   //update the users data
+  //   rangeOfValues = vtkm::Range(result[0], result[1]);
+  // }
 
   template <typename FieldType, typename Storage>
   void PrintArray(vtkm::cont::ArrayHandle<FieldType, Storage> arr)
   {
-    for (vtkm::Id i = 0; i < arr.GetNumberOfValues(); i++)
+    int i ;
+    for (i = 0; i < 20; i++)
     {
-      std::cout <<  arr.GetPortalConstControl().Get(i) << " ";
+      std::cout <<  arr.GetPortalConstControl().Get(i) <<' ';//<<  arr.GetPortalConstControl().Get(i)[1] << " ";
     }
-    std::cout << std::endl;
+    std::cout << '\n' ;
   }
   // Execute the histogram binning filter given data and number of bins, min,
   // max values.
   // Returns:
   // number of values in each bin
-  template <typename FieldType, typename Storage>
+  template <typename FieldType, typename Storage  >
   void Run(vtkm::cont::ArrayHandle<FieldType, Storage> fieldArray,
-           vtkm::Id numberOfBlocks,
+           vtkm::Vec<vtkm::Id, 3> cutInfo,
            vtkm::Id numberOfBins,
-           FieldType fieldMinValue,
-           FieldType fieldMaxValue,
-           FieldType& binDelta,
+           vtkm::cont::ArrayHandle<vtkm::Float32>& blockMin,
+           vtkm::cont::ArrayHandle<vtkm::Float32>& binDelta,
            vtkm::cont::ArrayHandle<vtkm::Id>& binArray)
   {
     const vtkm::Id numberOfValues = fieldArray.GetNumberOfValues();
     vtkm::cont::ArrayHandleCounting<vtkm::Id> eleIndex(0, 1, numberOfValues);
-
-    const FieldType fieldDelta = compute_delta(fieldMinValue, fieldMaxValue, numberOfBins);
+    //std::cout << eleIndex.GetNumberOfValues() << '\n';
+    //PrintArray(eleIndex);
+    //const auto fieldDelta = compute_delta(fieldMinValue, fieldMaxValue, numberOfBins);
 
     // Worklet fills in the bin belonging to each value
     vtkm::cont::ArrayHandle<vtkm::Id> blockIndex;
@@ -212,42 +265,62 @@ public:
     binIndex.Allocate(numberOfValues);
 
     // Worklet to set the block number for each data value
-    SetBlock<FieldType> blockWorklet(numberOfBlocks);
-    vtkm::worklet::DispatcherMapField<SetBlock<FieldType>> setBlockDispatcher(
+    SetBlock blockWorklet(cutInfo);
+    vtkm::worklet::DispatcherMapField<SetBlock> setBlockDispatcher(
       blockWorklet);
     setBlockDispatcher.Invoke(eleIndex, blockIndex);
-    //PrintArray(blockIndex);
 
-    // Worklet to set the bin number for each data value
-    SetHistogramBin<FieldType> binWorklet(numberOfBins, fieldMinValue, fieldDelta);
-    vtkm::worklet::DispatcherMapField<SetHistogramBin<FieldType>> setHistogramBinDispatcher(
-      binWorklet);
-    setHistogramBinDispatcher.Invoke(fieldArray, binIndex);
-    vtkm::cont::ArrayHandleZip<vtkm::cont::ArrayHandle<vtkm::Id> , vtkm::cont::ArrayHandle<vtkm::Id> > zips = vtkm::cont::make_ArrayHandleZip( blockIndex, binIndex);
-
+    vtkm::cont::ArrayHandleZip<vtkm::cont::ArrayHandle<vtkm::Id> , vtkm::cont::ArrayHandle<FieldType> > zips = vtkm::cont::make_ArrayHandleZip( blockIndex, fieldArray);
     // Sort the resulting bin array for counting
     vtkm::cont::Algorithm::Sort(zips);
-    
     vtkm::worklet::Zip2 unzip;
-    unzip.Run(zips,blockIndex,binIndex);
+    unzip.Run(zips,blockIndex,fieldArray);
 
-    //PrintArray(binIndex);
+    vtkm::cont::ArrayHandle<vtkm::Id> uniqueKeys;
+    vtkm::cont::ArrayHandle<FieldType> blockMax;
+    vtkm::cont::Algorithm::ReduceByKey(blockIndex, fieldArray, uniqueKeys, blockMax, vtkm::Maximum());
+    vtkm::cont::Algorithm::ReduceByKey(blockIndex, fieldArray, uniqueKeys, blockMin, vtkm::Minimum());
+    //PrintArray(BlockMax);
+    std::cout << "uniquekeys:"<<uniqueKeys.GetNumberOfValues() << '\n';
+    std::cout <<blockMin.GetPortalConstControl().Get(10000) << '\n';
+    /*
+    ComputeDelta<FieldType> deltaWorklet(numberOfBins);
+    vtkm::worklet::DispatcherMapField<ComputeDelta<FieldType>> computeDeltaDispatcher(deltaWorklet);
+    computeDeltaDispatcher.Invoke(blockMin, blockMax, binDelta);
+    
+    std::cout <<blockMin.GetPortalConstControl().Get(10000) << '\n';
+    
+    
+    // Worklet to set the bin number for each data value
+    SetHistogramBin<FieldType> binWorklet(numberOfBins);
+    vtkm::worklet::DispatcherMapField<SetHistogramBin<FieldType>> setHistogramBinDispatcher(binWorklet);
+    setHistogramBinDispatcher.Invoke(blockMin, binDelta, blockIndex, fieldArray, binIndex);
+    
+    
+    PrintArray(binIndex);
+    vtkm::cont::ArrayHandleZip<vtkm::cont::ArrayHandle<vtkm::Id> , vtkm::cont::ArrayHandle<vtkm::Id> > zips2 = vtkm::cont::make_ArrayHandleZip( blockIndex, binIndex);
+    // Sort the resulting bin array for counting
+    vtkm::cont::Algorithm::Sort(zips2);
+    unzip.Run(zips2,blockIndex,binIndex);
+    PrintArray(binIndex);
+
     BlockShift blockShiftWorklet(numberOfBins);
     vtkm::worklet::DispatcherMapField<BlockShift> BlockShiftkDispatcher(
       blockShiftWorklet);
     BlockShiftkDispatcher.Invoke(blockIndex, binIndex , binIndex);
-
+    
     // Get the upper bound of each bin number
     vtkm::cont::ArrayHandle<vtkm::Id> totalCount;
-    vtkm::cont::ArrayHandleCounting<vtkm::Id> binCounter(0, 1, numberOfBins*numberOfBlocks);
+    vtkm::cont::ArrayHandleCounting<vtkm::Id> binCounter(0, 1, numberOfBins*cutInfo[0]*cutInfo[1]*cutInfo[2]);
     vtkm::cont::Algorithm::UpperBounds(binIndex, binCounter, totalCount);
 
     // Difference between adjacent items is the bin count
     vtkm::worklet::DispatcherMapField<AdjacentDifference> dispatcher;
     dispatcher.Invoke(binCounter, totalCount, binArray);
-    
+    */
     //update the users data
-    binDelta = fieldDelta;
+    //binDelta = fieldDelta;
+    std::cout << "FK" << std::endl;
   }
 };
 }

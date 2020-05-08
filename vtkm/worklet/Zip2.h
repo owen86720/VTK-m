@@ -52,20 +52,20 @@ public:
     using ExecutionSignature = void(_1, _2, _3);
     using InputDomain = _1;
 
-    template <typename WholeArrayType>
+    template <typename WholeArrayType, typename FieldType, typename FieldType2>
     VTKM_EXEC void operator()(const WholeArrayType& zipped,
-                              vtkm::Id& firstout,
-                              vtkm::Id& secondout) const
+                              FieldType& firstout,
+                              FieldType2& secondout) const
     {
       firstout = zipped.first;
       secondout = zipped.second;
     }
   };
 
-  template <typename FieldType, typename Storage>
-  void Run(vtkm::cont::ArrayHandleZip<vtkm::cont::ArrayHandle<FieldType, Storage> , vtkm::cont::ArrayHandle<FieldType, Storage> > zippedArray,
-           vtkm::cont::ArrayHandle<vtkm::Id>& Array1,
-           vtkm::cont::ArrayHandle<vtkm::Id>& Array2)
+  template <typename FieldType, typename FieldType2, typename Storage>
+  void Run(vtkm::cont::ArrayHandleZip<vtkm::cont::ArrayHandle<FieldType, Storage> , vtkm::cont::ArrayHandle<FieldType2, Storage> > zippedArray,
+           vtkm::cont::ArrayHandle<FieldType>& Array1,
+           vtkm::cont::ArrayHandle<FieldType2>& Array2)
   {
     // Difference between adjacent items is the bin count
     vtkm::worklet::DispatcherMapField<Unzipped> dispatcher;
