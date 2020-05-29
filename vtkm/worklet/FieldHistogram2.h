@@ -14,6 +14,7 @@
 #include <vtkm/Math.h>
 #include <vtkm/cont/Algorithm.h>
 #include <vtkm/cont/ArrayGetValues.h>
+#include <vtkm/cont/ArrayCopy.h>
 #include <vtkm/cont/ArrayHandle.h>
 #include <vtkm/cont/ArrayHandleCounting.h>
 #include <vtkm/worklet/DispatcherMapField.h>
@@ -128,30 +129,32 @@ public:
   class SetHistogramBin : public vtkm::worklet::WorkletMapField
   {
   public:
-    using ControlSignature = void(WholeArrayIn blockMin, WholeArrayIn delta, FieldIn blockIndex, FieldIn value, FieldOut binIndex);
-    using ExecutionSignature = void(_1, _2, _3, _4, _5);
+    using ControlSignature = void(FieldIn blockIndex, FieldIn value, FieldOut binIndex);
+    using ExecutionSignature = void(_1, _2, _3);
     using InputDomain = _1;
 
     vtkm::Id numberOfBins;
-
+    vtkm::cont::ArrayHandle<vtkm::Float32> blockMin;
+    vtkm::cont::ArrayHandle<vtkm::Float32> delta;
     VTKM_CONT
-    SetHistogramBin(vtkm::Id numberOfBins0)
+    SetHistogramBin(vtkm::Id numberOfBins0,
+                    vtkm::cont::ArrayHandle<vtkm::Float32> blockMin0,
+                    vtkm::cont::ArrayHandle<vtkm::Float32> delta0)
       : numberOfBins(numberOfBins0)
     {
+      vtkm::cont::ArrayCopy(blockMin0 , blockMin );
+      vtkm::cont::ArrayCopy(delta0 , delta );
     }
 
-    template <typename WholeArrayType>
     VTKM_EXEC
-    void operator()(const WholeArrayType& blockMin,
-                    const WholeArrayType& delta,
-                    const vtkm::Id& blockIndex, 
+    void operator()(const vtkm::Id& blockIndex, 
                     const FieldType& value, 
                     vtkm::Id& binIndex) const
     {
       FieldType minValue;
       FieldType deltaValue;
-      minValue = blockMin.Get(blockIndex);
-      deltaValue = delta.Get(blockIndex);
+      minValue = blockMin.GetPortalConstControl().Get(blockIndex);
+      deltaValue = delta.GetPortalConstControl().Get(blockIndex);
 
       binIndex = static_cast<vtkm::Id>((value - minValue) / deltaValue);
       if (binIndex < 0)
@@ -234,7 +237,7 @@ public:
   void PrintArray(vtkm::cont::ArrayHandle<FieldType, Storage> arr)
   {
     int i ;
-    for (i = 0; i < 20; i++)
+    for (i = 0; i < arr.GetNumberOfValues(); i++)
     {
       std::cout <<  arr.GetPortalConstControl().Get(i) <<' ';//<<  arr.GetPortalConstControl().Get(i)[1] << " ";
     }
@@ -282,27 +285,39 @@ public:
     vtkm::cont::Algorithm::ReduceByKey(blockIndex, fieldArray, uniqueKeys, blockMin, vtkm::Minimum());
     //PrintArray(BlockMax);
     std::cout << "uniquekeys:"<<uniqueKeys.GetNumberOfValues() << '\n';
-    std::cout <<blockMin.GetPortalConstControl().Get(10000) << '\n';
-    /*
+    //std::cout <<blockMin.GetPortalConstControl().Get(10000) << '\n';
+    
     ComputeDelta<FieldType> deltaWorklet(numberOfBins);
     vtkm::worklet::DispatcherMapField<ComputeDelta<FieldType>> computeDeltaDispatcher(deltaWorklet);
     computeDeltaDispatcher.Invoke(blockMin, blockMax, binDelta);
     
-    std::cout <<blockMin.GetPortalConstControl().Get(10000) << '\n';
+    //std::cout <<binDelta.GetPortalConstControl().Get(7999) << '\n';
+    // std::cout << "blockIndex:"<<blockIndex.GetNumberOfValues() << '\n';
+    // std::cout << "fieldArray:"<<fieldArray.GetNumberOfValues() << '\n';
+    // std::cout << "blockIndex:"<<blockIndex.GetNumberOfValues() << '\n';
+    // vtkm :: cont :: Algorithm :: Sort ( blockIndex );
+    // std::cout <<"Min:" << blockIndex.GetPortalConstControl().Get(0) << '\n';
+    // vtkm :: cont :: Algorithm :: Sort ( blockIndex , vtkm :: SortGreater ());
+    // std::cout <<"Max:" << blockIndex.GetPortalConstControl().Get(0) << '\n';
+    // vtkm::cont::ArrayHandle<FieldType> temp;
+    // vtkm::cont::ArrayCopy(blockIndex , temp );
+    // std::cout <<"copy:" << temp.GetPortalConstControl().Get(0) << '\n';
     
+
+
     
     // Worklet to set the bin number for each data value
-    SetHistogramBin<FieldType> binWorklet(numberOfBins);
+    SetHistogramBin<FieldType> binWorklet(numberOfBins,blockMin,binDelta);
     vtkm::worklet::DispatcherMapField<SetHistogramBin<FieldType>> setHistogramBinDispatcher(binWorklet);
-    setHistogramBinDispatcher.Invoke(blockMin, binDelta, blockIndex, fieldArray, binIndex);
+    setHistogramBinDispatcher.Invoke(blockIndex, fieldArray, binIndex);
     
     
-    PrintArray(binIndex);
+    //PrintArray(binIndex);
     vtkm::cont::ArrayHandleZip<vtkm::cont::ArrayHandle<vtkm::Id> , vtkm::cont::ArrayHandle<vtkm::Id> > zips2 = vtkm::cont::make_ArrayHandleZip( blockIndex, binIndex);
     // Sort the resulting bin array for counting
     vtkm::cont::Algorithm::Sort(zips2);
     unzip.Run(zips2,blockIndex,binIndex);
-    PrintArray(binIndex);
+    //PrintArray(binIndex);
 
     BlockShift blockShiftWorklet(numberOfBins);
     vtkm::worklet::DispatcherMapField<BlockShift> BlockShiftkDispatcher(
@@ -317,10 +332,12 @@ public:
     // Difference between adjacent items is the bin count
     vtkm::worklet::DispatcherMapField<AdjacentDifference> dispatcher;
     dispatcher.Invoke(binCounter, totalCount, binArray);
-    */
+    
     //update the users data
     //binDelta = fieldDelta;
+    
     std::cout << "FK" << std::endl;
+
   }
 };
 }
